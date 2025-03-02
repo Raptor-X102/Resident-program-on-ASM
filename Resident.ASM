@@ -5,18 +5,26 @@ org 100h
 LOCALS @@
 VIDEO_MEM_SEGMENT equ 0b800h
 COMMAND_STR_OFFSET equ 81h
+
 USER_FORMAT_NUM equ 0h
+
 WINDOW_HEIGHT equ 18h
 WINDOW_WIDTH equ 50h
-FRAME_HEIGHT equ 16h
-FRAME_WIDTH equ 40h
+FRAME_HEIGHT equ 0eh
+FRAME_WIDTH equ 15
 FRAME_COLOUR equ 1ch
+FRAME_INIT_OFFSET equ 0ah
+
 REG_STR_OFFSET_1 equ 5
-REG_STR_OFFSET_2 equ 7
+REG_STR_OFFSET_2 equ 6
+REG_STR_LAST 	equ 118
+
 NEW_LINE_SEG_OFFSET equ 0ah
+
 DEC_BASE equ 0ah
+
 OFFSET_RATIO equ 5h
-VIDEO_MEM_SEG equ 0b800h
+
 CALL_BUTTON equ 29h
 EXIT_BUTTON equ 4fh
 
@@ -125,6 +133,8 @@ String_main	proc
 		mov word ptr cs:[Tmp_DI], di
 		mov word ptr cs:[Tmp_ES], es
 		mov word ptr cs:[Tmp_DS], ds
+		mov word ptr cs:[Tmp_SS], ss
+		mov word ptr cs:[Tmp_CS], cs
 
 
 		mov bx, cs
@@ -135,9 +145,9 @@ String_main	proc
         mov ah, FRAME_COLOUR
         call Draw_Frame
 
-        mov si, offset Tmp_AX
+        mov si, offset Tmp_SS
 		push di dx bp
-		mov di, offset Registr_string1 + REG_STR_OFFSET_1
+		mov di, offset Registr_string1 + REG_STR_LAST
 		call Itoa_hex
 		pop bp dx di
 
@@ -164,27 +174,8 @@ Func_seg2:        dw 0        ; |
 
 		endp
 ;------------------------------------------------
-Flag_value:		db 0
 
 
-Tmp_AX:     dw 0h
-Tmp_BX:     dw 0h
-Tmp_CX:     dw 0h
-Tmp_DX:     dw 0h
-Tmp_BP:     dw 0h
-Tmp_DI:     dw 0h
-Tmp_SI:     dw 0h
-End_of_print: db '$'
-Tmp_SP:     dw 0h
-Tmp_ES:     dw 0h
-Tmp_DS:     dw 0h
-Tmp_CS:     dw 0h
-
-Registr_string1: db 'AX =     , BX =     , CX =     , DX =     , BP =     , '
-				 db 'DI =     , SI =      $'
-String: db 'One Piece is REEEEEEEAAAAALLLLL!!!$'
-Frame_style: db '+-+I I\_/$'
-			 db 3h, 3h, 3h, 3h, ' ', 3h, 3h, 3h, 3h, '$'
 
 ;------------------------------------------------
 ; Draws a frame with centered text
@@ -204,9 +195,11 @@ Draw_Frame	proc
 		add bx, cx		; | --> mul 5
 		add bx, VIDEO_MEM_SEGMENT		; with alignment
 		mov es, bx
+		mov word ptr cs:[Aligned_ES], es
 
-		mov di, WINDOW_WIDTH
-		sub di, bp		; puts double left border offset, but each symbol is specified by 2 bytes
+		mov di, FRAME_INIT_OFFSET
+		;mov di, WINDOW_WIDTH
+		;sub di, bp		; puts double left border offset, but each symbol is specified by 2 bytes
 
 		sub dx, 2h		; | amount of symbols between borders
 		sub bp, 2h		; |
@@ -276,16 +269,19 @@ Draw_Line	proc
 Write_String	proc
 
 		push ax
+		mov word ptr cs:[Frame_height_copy], dx
 		mov ax, dx
 		mov bx, ax		;
 		shl ax, 2h		; |
 		add ax, bx		; | --> mul 5, addr += height/2 * 160 = height * 80 = (height * 16) * 5
 		mov bx, es
 		add ax, bx
-		mov es, ax		; es aligned to the center of window
+
+		;mov es, ax		; es aligned to the center of window
 
 
 		mov ax, bp
+
 		mov dx, 0h
 		mov bx, OFFSET_RATIO
 		div bx	; |--> div 5. sum of offsets to string length ratio is 1 to 5
@@ -330,17 +326,35 @@ Write_String	proc
 
 		@@Line_break:
 
+        ;
 		mov ax, dx
 		mov dx, 0h
 		div bx			; (amount of full lines to write) = real length of string / aligned size of line
 		mov cx, ax		; (amount of lines to write) - 1
+		;pop ax
+		;inc cx
+		mov ax, word ptr cs:[Frame_height_copy]
+		sub ax, cx
+		;dec ax
+		;shr ax, 1h
+		push bx
+		mov bx, 5h
+		mul bx
+		pop bx
+		mov dx, word ptr cs:[Aligned_ES]
+		;mov ax, es
+		add ax, dx
+		mov es, ax
+
 		mov ax, bp
 		sub ax, bx
 		add ax, 4h
 		and ax, 0feh	; mask of 11111110b to make di even
 		dec bx
-		add di, ax	; counting offset needed for di
+		mov di, FRAME_INIT_OFFSET + 6
+		;add di, ax	; counting offset needed for di
 		pop ax
+		inc cx
 
 @@Loop1:
 		push di
@@ -498,7 +512,7 @@ Atoi_hex	proc
 
 Itoa_hex	proc
 
-		cli		; without this it didn't work properly
+		;cli		; without this it didn't work properly
 				; last registers were not written
 		mov al, 9h		; |frequently compared values, faster if save in registers
 		mov bp, 09fh	; | check whether it is a letter or digit
@@ -506,10 +520,10 @@ Itoa_hex	proc
 
 		@@cond:
 		xor cx, cx
-		cmp byte ptr cs:[di], ','
+		cmp byte ptr cs:[di-1], '='
 		jne @@Skip
 
-		add di, REG_STR_OFFSET_2	; jmp to next memory for converted registers' values
+		sub di, REG_STR_OFFSET_2	; jmp to next memory for converted registers' values
 
 		@@Skip:
 		mov cl, byte ptr cs:[bx]
@@ -544,8 +558,8 @@ Itoa_hex	proc
 		inc bx
 		mov ch, dl
 		mov cl, dh
-		mov cs:[di], cx		; puts into result string
-		add di, 2h
+		mov cs:[di-1], cx		; puts into result string
+		sub di, 2h
 
 		jmp @@cond
 
@@ -556,13 +570,13 @@ Itoa_hex	proc
 		inc bx
 		mov ch, dl
 		mov cl, dh
-		mov cs:[di], cx
-		add di, 2h
+		mov cs:[di-1], cx
+		sub di, 2h
 
 		jmp @@cond
 
 		@@Break:
-		sti
+		;sti
 		ret
 		endp
 ;------------------------------------------------
@@ -582,11 +596,38 @@ Skip_spaces		proc
 		mov cx, 0ffffh
 		mov al, ' '
 		repe scasb
-		sub di, 1h		; IDK why repe scasb does 1 extra iteration
+		sub di, 1h
 		pop es
 		ret
 		endp
 ;------------------------------------------------
+
+
+Flag_value:		db 0
+
+
+Tmp_SS:     dw 0h
+Tmp_CS:     dw 0h
+Tmp_DS:     dw 0h
+Tmp_ES:     dw 0h
+Tmp_SP:     dw 0h
+Tmp_SI:     dw 0h
+Tmp_DI:     dw 0h
+Tmp_BP:     dw 0h
+Tmp_DX:     dw 0h
+Tmp_CX:     dw 0h
+Tmp_BX:     dw 0h
+Tmp_AX:     dw 0h
+End_of_print: db '$'
+
+Frame_height_copy: 		dw 0h
+Aligned_ES:				dw 0h
+
+Registr_string1: db 'AX =     ,BX =     ,CX =     ,DX =     ,BP =     ,DI =     ,'
+				 db 'SI =     ,SP =     ,ES =     ,DS =     ,CS =     ,SS =     $'
+String: db 'One Piece is REEEEEEEAAAAALLLLL!!!$'
+Frame_style: db '+-+I I\_/$'
+			 db 3h, 3h, 3h, 3h, ' ', 3h, 3h, 3h, 3h, '$'
 
 End_of_code:
 end Start
